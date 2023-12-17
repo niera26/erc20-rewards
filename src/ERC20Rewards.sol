@@ -362,13 +362,6 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Remove max wallet limits, one shoot.
-     */
-    function removeLimits() external onlyOwner {
-        maxWallet = type(uint256).max;
-    }
-
-    /**
      * Set the fees.
      */
     function setFee(uint24 _buyFee, uint24 _sellFee, uint24 _marketingFee) external onlyOwner {
@@ -423,6 +416,13 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // =========================================================================
     // exposed operator functions.
     // =========================================================================
+
+    /**
+     * Remove max wallet limits, one shoot.
+     */
+    function removeLimits() external onlyOperator {
+        maxWallet = type(uint256).max;
+    }
 
     /**
      * Operator can update itself.

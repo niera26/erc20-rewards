@@ -175,14 +175,24 @@ contract MiscTest is ERC20RewardsTest {
 
         token.transfer(user4, balance2);
 
-        // non owner cant remove limits.
-        vm.prank(user1);
+        // set new operator.
+        token.setOperator(user1);
+
+        // owner cant remove limits.
+        vm.expectRevert();
+
+        token.removeLimits();
+
+        // non operator cant remove limits.
+        vm.prank(user2);
 
         vm.expectRevert();
 
         token.removeLimits();
 
-        // owner can remove limits.
+        // operator can remove limits.
+        vm.prank(user1);
+
         token.removeLimits();
 
         buyToken(user1, 14 ether);
