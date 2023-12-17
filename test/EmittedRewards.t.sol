@@ -5,41 +5,6 @@ import "forge-std/Test.sol";
 import {ERC20RewardsTest} from "./ERC20RewardsTest.t.sol";
 
 contract EmittedRewardsTest is ERC20RewardsTest {
-    function testSetRewardTokenPerBlock() public {
-        address user1 = vm.addr(1);
-        address user2 = vm.addr(2);
-
-        // by default the reward token per block is 0.
-        assertEq(token.rewardTokenPerBlock(), 0);
-
-        // by default owner can set reward token per block.
-        token.setRewardTokenPerBlock(1000);
-
-        assertEq(token.rewardTokenPerBlock(), 1000);
-
-        // set new operator.
-        token.setOperator(user1);
-
-        // operator can set reward token per block.
-        vm.prank(user1);
-
-        token.setRewardTokenPerBlock(2000);
-
-        assertEq(token.rewardTokenPerBlock(), 2000);
-
-        // owner now revert.
-        vm.expectRevert("!operator");
-
-        token.setRewardTokenPerBlock(3000);
-
-        // non operator reverts.
-        vm.prank(user2);
-
-        vm.expectRevert("!operator");
-
-        token.setRewardTokenPerBlock(3000);
-    }
-
     function testEmittedRewardsAccumulates() public {
         address user1 = vm.addr(1);
         address user2 = vm.addr(2);

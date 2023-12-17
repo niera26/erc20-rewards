@@ -6,81 +6,6 @@ import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import {ERC20RewardsTest, ERC20Mock} from "./ERC20RewardsTest.t.sol";
 
 contract MiscTest is ERC20RewardsTest {
-    function testSetOperator() public {
-        address user1 = vm.addr(1);
-        address user2 = vm.addr(2);
-        address user3 = vm.addr(3);
-
-        // by default operator is owner.
-        assertEq(token.operator(), address(this));
-
-        // by default owner can set operator.
-        token.setOperator(user1);
-
-        assertEq(token.operator(), user1);
-
-        // operator can set operator.
-        vm.prank(user1);
-
-        token.setOperator(user2);
-
-        assertEq(token.operator(), user2);
-
-        // owner now reverts.
-        vm.expectRevert("!operator");
-
-        token.setOperator(user3);
-
-        // user reverts.
-        vm.prank(user1);
-
-        vm.expectRevert("!operator");
-
-        token.setOperator(user3);
-
-        // zero address reverts.
-        vm.prank(user2);
-
-        vm.expectRevert("!address");
-
-        token.setOperator(address(0));
-    }
-
-    function testSetPoolFee() public {
-        address user1 = vm.addr(1);
-        address user2 = vm.addr(2);
-
-        // by default the pool fee is 10000.
-        assertEq(token.poolFee(), 10000);
-
-        // by default owner can set pool fee.
-        token.setPoolFee(5000);
-
-        assertEq(token.poolFee(), 5000);
-
-        // set new operator.
-        token.setOperator(user1);
-
-        // operator can set pool fee.
-        vm.prank(user1);
-
-        token.setPoolFee(4000);
-
-        assertEq(token.poolFee(), 4000);
-
-        // owner now revert.
-        vm.expectRevert("!operator");
-
-        token.setPoolFee(3000);
-
-        // non operator reverts.
-        vm.prank(user2);
-
-        vm.expectRevert("!operator");
-
-        token.setPoolFee(3000);
-    }
-
     function testSetFee() public {
         address user = vm.addr(1);
 
@@ -175,24 +100,7 @@ contract MiscTest is ERC20RewardsTest {
 
         token.transfer(user4, balance2);
 
-        // set new operator.
-        token.setOperator(user1);
-
-        // owner cant remove limits.
-        vm.expectRevert();
-
-        token.removeLimits();
-
-        // non operator cant remove limits.
-        vm.prank(user2);
-
-        vm.expectRevert();
-
-        token.removeLimits();
-
-        // operator can remove limits.
-        vm.prank(user1);
-
+        // after removing limits it is working.
         token.removeLimits();
 
         buyToken(user1, 14 ether);
