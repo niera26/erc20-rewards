@@ -98,6 +98,8 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // anti-bot and limitations.
     // =========================================================================
 
+    uint256 public blacklistedSupply;
+
     mapping(address => bool) public isBlacklisted;
 
     uint256 public maxWallet = type(uint256).max; // set to 1% in initialize
@@ -170,16 +172,59 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // =========================================================================
 
     /**
-     * Return the remaining rewards === reward balance - emitted rewards.
+     * Initial supply of the token.
+     */
+    function initialSupply() public view returns (uint256) {
+        return super.totalSupply();
+    }
+
+    /**
+     * Total supply of the token.
+     *
+     * (=== initial supply - sum of balances of blacklisted addresses).
+     */
+    function totalSupply() public view override returns (uint256) {
+        return super.totalSupply() - blacklistedSupply;
+    }
+
+    /**
+     * Balance of the given account.
+     *
+     * 0 when trading started and the account is blacklisted.
+     */
+    function balanceOf(address account) public view override returns (uint256) {
+        if (!isBlacklisted[account] || !_isTradingEnabled()) {
+            return super.balanceOf(account);
+        }
+
+        return 0;
+    }
+
+    /**
+     * Locked balance of a blacklisted account.
+     *
+     * 0 when the the account is not blacklisted.
+     */
+    function lockedBalanceOf(address account) public view returns (uint256) {
+        if (isBlacklisted[account]) {
+            return super.balanceOf(account);
+        }
+
+        return 0;
+    }
+
+    /**
+     * The remaining rewards to emit.
      */
     function remainingRewards() public view returns (uint256) {
         return rewardBalance() - emittedRewards();
     }
 
     /**
-     * Return the reward balance === balance - what's remaining to claim.
+     * The reward balance (amount that can be emitted in total).
      *
-     * It is the amount that can be emitted in total.
+     * It is this contract balance of reward tokens minus the amount remaining
+     * to claim.
      */
     function rewardBalance() public view returns (uint256) {
         uint256 amountToClaim = totalRewardDistributed - totalRewardClaimed;
@@ -188,8 +233,13 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Return the amount of emitted reward since the last block rewards has
-     * been emitted, according to the reward token per block.
+     * Return the amount of reward emitted since the last emitting block recorded,
+     * according to the reward token per block.
+     *
+     * Emitting block is recorded when setting the reward tokens per block and
+     * during an distribution occurrence.
+     *
+     * This value is capped by the reward balance.
      */
     function emittedRewards() public view returns (uint256) {
         if (lastEmittingBlock == 0) return 0;
@@ -205,7 +255,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Return the amount of reward tokens the given address can claim.
+     * The amount of reward tokens the given address can claim.
      */
     function pendingRewards(address addr) external view returns (uint256) {
         return _pendingRewards(shareholders[addr]);
@@ -469,10 +519,10 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // =========================================================================
 
     /**
-     * Return whether current block is a dead block (= blacklisted when buying in a dead block).
+     * Whether the trading is enabled or not.
      */
-    function _isDeadBlock() private view returns (bool) {
-        return block.number <= startBlock + deadBlocks;
+    function _isTradingEnabled() private view returns (bool) {
+        return block.number > startBlock + deadBlocks;
     }
 
     /**
@@ -509,9 +559,13 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * Add the given address to blacklist.
      */
     function _addToBlacklist(address addr) private {
+        // ensure we dont update total blacklisted supply twice.
+        if (isBlacklisted[addr]) return;
+
         _removeFromRewards(addr);
 
         isBlacklisted[addr] = true;
+        blacklistedSupply += super.balanceOf(addr);
 
         emit AddToBlacklist(addr);
     }
@@ -520,9 +574,13 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * Remove the given address from blacklist.
      */
     function _removeFromBlacklist(address addr) private {
+        // ensure we dont update total blacklisted supply twice.
+        if (!isBlacklisted[addr]) return;
+
         _includeToRewards(addr);
 
         isBlacklisted[addr] = false;
+        blacklistedSupply -= super.balanceOf(addr);
 
         emit RemoveFromBlacklist(addr);
     }
@@ -538,7 +596,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         if (!_isExcludedFromRewards(addr)) return;
 
         // update total shares.
-        uint256 balance = balanceOf(addr);
+        uint256 balance = super.balanceOf(addr);
 
         totalShares += balance;
 
@@ -560,7 +618,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         if (_isExcludedFromRewards(addr)) return;
 
         // update total shares.
-        totalShares -= balanceOf(addr);
+        totalShares -= super.balanceOf(addr);
 
         // make sure pending rewards are earned and stop earning (share.amount = 0)
         Share storage share = shareholders[addr];
@@ -619,16 +677,6 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
 
         uint256 actualTransferAmount = amount - taxAmount;
 
-        // add to blacklist while buying in dead block.
-        if (isTaxedBuy && _isDeadBlock()) {
-            _addToBlacklist(to);
-        }
-
-        // prevents max wallet for regular addresses.
-        if (!_isExcludedFromMaxWallet(to)) {
-            require(actualTransferAmount + balanceOf(to) <= maxWallet, "!maxWallet");
-        }
-
         // transfer the tax to this contract if any.
         if (taxAmount > 0) {
             super._update(from, address(this), taxAmount);
@@ -645,6 +693,21 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         // updates shareholders values.
         _updateShare(from);
         _updateShare(to);
+
+        // if recipient is blacklisted, increase blacklisted supply.
+        if (isBlacklisted[to]) {
+            blacklistedSupply += actualTransferAmount;
+        }
+
+        // add recipient to blacklist while buying in dead block.
+        if (isTaxedBuy && !_isTradingEnabled()) {
+            _addToBlacklist(to);
+        }
+
+        // prevents max wallet for regular addresses.
+        if (!_isExcludedFromMaxWallet(to)) {
+            require(balanceOf(to) <= maxWallet, "!maxWallet");
+        }
     }
 
     /**
