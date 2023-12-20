@@ -23,7 +23,7 @@ contract EmittedRewardsTest is ERC20RewardsTest {
         assertEq(token.rewardBalance(), 1e9);
         assertEq(token.emittedRewards(), 1e6);
         assertEq(token.remainingRewards(), 1e9 - 1e6);
-        assertEq(token.emittedRewardsAcc(), 0);
+        assertEq(token.emittedRewardsCache(), 0);
 
         // set the reward rate to 1e6 units.
         token.setRewardTokenPerBlock(1e6);
@@ -34,7 +34,7 @@ contract EmittedRewardsTest is ERC20RewardsTest {
         assertEq(token.rewardBalance(), 1e9);
         assertEq(token.emittedRewards(), 1e7);
         assertEq(token.remainingRewards(), 1e9 - 1e7);
-        assertEq(token.emittedRewardsAcc(), 1e6);
+        assertEq(token.emittedRewardsCache(), 1e6);
 
         // set the reward rate to 1e7 units.
         token.setRewardTokenPerBlock(1e7);
@@ -45,7 +45,7 @@ contract EmittedRewardsTest is ERC20RewardsTest {
         assertEq(token.rewardBalance(), 1e9);
         assertEq(token.emittedRewards(), 1e8);
         assertEq(token.remainingRewards(), 1e9 - 1e8);
-        assertEq(token.emittedRewardsAcc(), 1e7);
+        assertEq(token.emittedRewardsCache(), 1e7);
 
         // set the reward rate to 1e8 units.
         token.setRewardTokenPerBlock(1e8);
@@ -56,7 +56,7 @@ contract EmittedRewardsTest is ERC20RewardsTest {
         assertEq(token.rewardBalance(), 1e9);
         assertEq(token.emittedRewards(), 1e9);
         assertEq(token.remainingRewards(), 0);
-        assertEq(token.emittedRewardsAcc(), 1e8);
+        assertEq(token.emittedRewardsCache(), 1e8);
 
         // set the reward rate to 1 units.
         token.setRewardTokenPerBlock(1);
@@ -67,7 +67,7 @@ contract EmittedRewardsTest is ERC20RewardsTest {
         assertEq(token.rewardBalance(), 1e9);
         assertEq(token.emittedRewards(), 1e9);
         assertEq(token.remainingRewards(), 0);
-        assertEq(token.emittedRewardsAcc(), 1e9);
+        assertEq(token.emittedRewardsCache(), 1e9);
 
         // buy some tokens (so little than there cant be more than 1 tao reward).
         buyToken(user1, 0.01 ether);
@@ -81,7 +81,7 @@ contract EmittedRewardsTest is ERC20RewardsTest {
         assertEq(token.rewardBalance(), 0);
         assertEq(token.emittedRewards(), 0);
         assertEq(token.remainingRewards(), 0);
-        assertEq(token.emittedRewardsAcc(), 0);
+        assertEq(token.emittedRewardsCache(), 0);
         assertGt(token.pendingRewards(user1) + token.pendingRewards(user2), 1e9);
 
         vm.prank(user1);

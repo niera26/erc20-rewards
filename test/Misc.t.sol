@@ -101,7 +101,7 @@ contract MiscTest is ERC20RewardsTest {
         token.transfer(user4, balance2);
 
         // after removing limits it is working.
-        token.removeLimits();
+        token.removeMaxWallet();
 
         buyToken(user1, 14 ether);
 

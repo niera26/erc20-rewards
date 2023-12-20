@@ -43,11 +43,11 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     uint256 private tokenPerShare;
 
     // total shares of this token.
-    // (different from total supply because of fees and excluded wallets).
+    // (different from total supply because of addresses excluded from rewards).
     uint256 public totalShares;
 
     // shareholders record.
-    // (non excluded addresses are updated after they send/receive tokens).
+    // (addresses included to rewards are updated every time they send/receive tokens).
     mapping(address => Share) private shareholders;
 
     struct Share {
@@ -56,7 +56,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         uint256 tokenPerShareLast; // token per share value of the last earn occurrence.
     }
 
-    // total amount of reward tokens ever claimed by holders.
+    // total amount of reward tokens ever claimed.
     uint256 public totalRewardClaimed;
 
     // total amount of reward tokens ever distributed.
@@ -76,8 +76,8 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // the number of reward tokens to emit per block.
     uint256 public rewardTokenPerBlock;
 
-    // the amout of reward tokens already emitted.
-    uint256 public emittedRewardsAcc;
+    // the amount of reward tokens emitted on last emitting block update.
+    uint256 public emittedRewardsCache;
 
     // last block reward tokens has been emitted.
     uint256 public lastEmittingBlock;
@@ -87,9 +87,11 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // =========================================================================
 
     // the operator address receive marketing tax and can set non critical
-    // settings. Allows to renounce ownership of critical settings. It is the
-    // same as the owner by default and receive marketing tax. It can:
+    // settings. Allows to renounce ownership so critical settings can't be
+    // updated anymore. It is the same as the owner by default and receive the
+    // marketing tax. It can:
     // - update itself.
+    // - remove max wallet limits.
     // - set uniswap V3 pool fee setting.
     // - set the reward token per block rate.
     address public operator;
@@ -98,7 +100,8 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // anti-bot and limitations.
     // =========================================================================
 
-    uint256 public blacklistedSupply;
+    // sum of blacklisted addresses balances.
+    uint256 public lockedSupply;
 
     mapping(address => bool) public isBlacklisted;
 
@@ -179,18 +182,16 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Total supply of the token.
-     *
-     * (=== initial supply - sum of balances of blacklisted addresses).
+     * Total non-locked supply of the token.
      */
     function totalSupply() public view override returns (uint256) {
-        return super.totalSupply() - blacklistedSupply;
+        return super.totalSupply() - lockedSupply;
     }
 
     /**
      * Balance of the given account.
      *
-     * 0 when trading started and the account is blacklisted.
+     * 0 when trading is enabled and the account is blacklisted.
      */
     function balanceOf(address account) public view override returns (uint256) {
         if (!isBlacklisted[account] || !_isTradingEnabled()) {
@@ -201,7 +202,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Locked balance of a blacklisted account.
+     * Locked balance of the given account.
      *
      * 0 when the the account is not blacklisted.
      */
@@ -233,7 +234,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Return the amount of reward emitted since the last emitting block recorded,
+     * The amount of reward emitted since the last emitting block recorded,
      * according to the reward token per block.
      *
      * Emitting block is recorded when setting the reward tokens per block and
@@ -249,7 +250,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
 
         if (balance == 0) return 0;
 
-        uint256 emitted = emittedRewardsAcc + (rewardTokenPerBlock * (block.number - lastEmittingBlock));
+        uint256 emitted = emittedRewardsCache + (rewardTokenPerBlock * (block.number - lastEmittingBlock));
 
         return emitted < balance ? emitted : balance;
     }
@@ -378,7 +379,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         totalRewardDistributed += amountToDistribute;
 
         // reset emitted rewards.
-        emittedRewardsAcc = 0;
+        emittedRewardsCache = 0;
         lastEmittingBlock = block.number;
 
         emit Distribute(msg.sender, amountToDistribute);
@@ -470,7 +471,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     /**
      * Remove max wallet limits, one shoot.
      */
-    function removeLimits() external onlyOperator {
+    function removeMaxWallet() external onlyOperator {
         maxWallet = type(uint256).max;
     }
 
@@ -494,7 +495,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * block before updating the value.
      */
     function setRewardTokenPerBlock(uint256 _rewardTokenPerBlock) external onlyOperator {
-        emittedRewardsAcc = emittedRewards();
+        emittedRewardsCache = emittedRewards();
         rewardTokenPerBlock = _rewardTokenPerBlock;
         lastEmittingBlock = block.number;
     }
@@ -511,7 +512,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * Empty the emitted rewards. Fallback in case of error.
      */
     function resetEmittedRewardsUnsafe() external onlyOperator {
-        emittedRewardsAcc = 0;
+        emittedRewardsCache = 0;
     }
 
     // =========================================================================
@@ -526,7 +527,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Return addresses excluded from max wallet limit (= this contract, router or pairs).
+     * Whether the given address is excluded from max wallet limit.
      *
      * Blacklisted addresses are excluded too so they can buy as much as they want.
      */
@@ -535,18 +536,18 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Return adresses excluded from taxes (= this contract or router).
+     * Whether the given adress is excluded from taxes.
      */
     function _isExcludedFromTaxes(address addr) private view returns (bool) {
         return address(this) == addr || address(router) == addr;
     }
 
     /**
-     * Retrun addresses excluded from rewards.
+     * Whether the given address is excluded from rewards.
      *
-     * - addresses of contracts that didn't opted in for rewards.
      * - blacklisted addresses.
-     * - zero address to save gas on mint/burn (its balance is always 0 so it would never get shares anyway)
+     * - addresses of contracts that didn't opted in for rewards.
+     * - zero address to save gas on mint/burn (its balance is always 0 so it would never get shares anyway).
      * - this contract address is removed too because address(this).code.length == 0 in the constructor.
      * - remove dead address because people are used to it.
      */
@@ -559,13 +560,13 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * Add the given address to blacklist.
      */
     function _addToBlacklist(address addr) private {
-        // ensure we dont update total blacklisted supply twice.
+        // ensure we dont update total locked supply twice.
         if (isBlacklisted[addr]) return;
 
         _removeFromRewards(addr);
 
         isBlacklisted[addr] = true;
-        blacklistedSupply += super.balanceOf(addr);
+        lockedSupply += super.balanceOf(addr);
 
         emit AddToBlacklist(addr);
     }
@@ -574,13 +575,13 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * Remove the given address from blacklist.
      */
     function _removeFromBlacklist(address addr) private {
-        // ensure we dont update total blacklisted supply twice.
+        // ensure we dont update total locked supply twice.
         if (!isBlacklisted[addr]) return;
 
         _includeToRewards(addr);
 
         isBlacklisted[addr] = false;
-        blacklistedSupply -= super.balanceOf(addr);
+        lockedSupply -= super.balanceOf(addr);
 
         emit RemoveFromBlacklist(addr);
     }
@@ -629,7 +630,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Compute the pending rewards of the given share.
+     * The pending rewards of the given share.
      *
      * The rewards earned since the last transfer are added to the already earned
      * rewards.
@@ -652,59 +653,60 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
-     * Override the update method in order to take fee when transfer is from/to
+     * Override the update method in order to take fee when the transfer is from/to
      * a registered amm pair.
      *
+     * - transfers from a blacklisted address reverts.
      * - transfers from/to registered pairs are taxed.
-     * - addresses buying in a deadblock are blacklisted and cant transfer tokens anymore.
-     * - prevents receiving address to get more than max wallet.
      * - taxed tokens are sent to this very contract.
      * - on a taxed sell, the collected tax is swapped for eth.
      * - updates the shares of both the from and to addresses.
+     * - addresses buying when trading is not enabled are blacklisted.
+     * - prevents receiving address to get more than max wallet.
      */
     function _update(address from, address to, uint256 amount) internal override {
-        // blacklisted addresses cant transfer tokens.
-        require(!isBlacklisted[from], "blacklisted");
+        // blacklisted addresses can't transfer tokens out.
+        require(!isBlacklisted[from], "locked");
 
-        // check if it is a taxed buy or sell.
+        // check if it is a taxed buy/sell.
         bool isTaxedBuy = pairs[from] && !_isExcludedFromTaxes(to);
         bool isTaxedSell = !_isExcludedFromTaxes(from) && pairs[to];
 
-        // take the fee if it is a buy or sell.
+        // compute the fee of a taxed buy/sell.
         uint256 fee = (isTaxedBuy ? buyFee : 0) + (isTaxedSell ? sellFee : 0);
 
         uint256 taxAmount = (amount * fee) / feeDenominator;
 
         uint256 actualTransferAmount = amount - taxAmount;
 
-        // transfer the tax to this contract if any.
+        // transfer the tax to this contract.
         if (taxAmount > 0) {
             super._update(from, address(this), taxAmount);
         }
 
-        // swaps the tax to eth if it is a taxed sell.
+        // swaps the tax to eth when it is a sell.
         if (isTaxedSell) {
             swapCollectedTax(0);
         }
 
-        // transfer the actual amount.
+        // transfer the actual amount to receiving address.
         super._update(from, to, actualTransferAmount);
 
-        // updates shareholders values.
+        // update shares of sending an receiving addresses.
         _updateShare(from);
         _updateShare(to);
 
-        // if recipient is blacklisted, increase blacklisted supply.
+        // increase locked supply when receiving address is blacklisted.
         if (isBlacklisted[to]) {
-            blacklistedSupply += actualTransferAmount;
+            lockedSupply += actualTransferAmount;
         }
 
-        // add recipient to blacklist while buying in dead block.
+        // add receiving address to blacklist when buying while trading is not enabled.
         if (isTaxedBuy && !_isTradingEnabled()) {
             _addToBlacklist(to);
         }
 
-        // prevents max wallet for regular addresses.
+        // revert when the receiving address balance is above max wallet.
         if (!_isExcludedFromMaxWallet(to)) {
             require(balanceOf(to) <= maxWallet, "!maxWallet");
         }

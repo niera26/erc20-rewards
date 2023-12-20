@@ -5,7 +5,7 @@ import {ERC20RewardsTest} from "./ERC20RewardsTest.t.sol";
 
 contract LiquidityTest is ERC20RewardsTest {
     function testRemoveAllLiquidity() public {
-        token.removeLimits(); // max wallet!
+        token.removeMaxWallet(); // max wallet!
 
         removeLiquidity(address(this));
 

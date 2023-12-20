@@ -122,19 +122,19 @@ contract OperatorTest is ERC20RewardsTest {
         // owner cant remove limits.
         vm.expectRevert();
 
-        token.removeLimits();
+        token.removeMaxWallet();
 
         // non operator cant remove limits.
         vm.prank(user2);
 
         vm.expectRevert();
 
-        token.removeLimits();
+        token.removeMaxWallet();
 
         // operator can remove limits.
         vm.prank(user1);
 
-        token.removeLimits();
+        token.removeMaxWallet();
 
         assertEq(token.maxWallet(), type(uint256).max);
     }
