@@ -39,13 +39,14 @@ contract BlacklistTest is ERC20RewardsTest {
         assertGt(token.lockedBalanceOf(user1), 0); // raw balance is still available
         assertGt(token.lockedBalanceOf(user2), 0); // raw balance is still available
 
+        // total supply is soft burned.
+        assertEq(token.totalSupply(), token.initialSupply() - token.blacklistedSupply());
+
+        // blacklisted supply is locked balance of user1 and user2.
+        assertEq(token.blacklistedSupply(), token.lockedBalanceOf(user1) + token.lockedBalanceOf(user2));
+
         // total shares are only user3.
         assertEq(token.totalShares(), token.balanceOf(user3));
-
-        // total supply is soft burned
-        assertEq(
-            token.totalSupply(), token.initialSupply() - token.lockedBalanceOf(user1) - token.lockedBalanceOf(user2)
-        );
     }
 
     function testRemoveFromBlacklist() public {
@@ -60,7 +61,11 @@ contract BlacklistTest is ERC20RewardsTest {
         uint256 balance1 = token.balanceOf(user1);
 
         assertTrue(token.isBlacklisted(user1));
-        assertGt(balance1, 0);
+        assertGt(token.balanceOf(user1), 0); // show the actual balance until the trading starts (uniswap accept swaps).
+        assertEq(token.totalShares(), 0);
+        assertEq(token.lockedBalanceOf(user1), balance1);
+        assertEq(token.blacklistedSupply(), balance1);
+        assertEq(token.totalSupply(), token.initialSupply() - balance1);
 
         // user2 buys.
         vm.roll(token.startBlock() + token.deadBlocks() + 1);
@@ -69,14 +74,16 @@ contract BlacklistTest is ERC20RewardsTest {
 
         uint256 balance2 = token.balanceOf(user2);
 
+        // trading started so user1 balance is locked.
+        assertTrue(token.isBlacklisted(user1));
         assertFalse(token.isBlacklisted(user2));
-        assertGt(balance2, 0);
-
-        // total shares is only user2 balance.
+        assertEq(token.balanceOf(user1), 0);
+        assertGt(token.balanceOf(user2), 0);
         assertEq(token.totalShares(), balance2);
-
-        // total supply is soft burned
-        assertEq(token.totalSupply(), token.initialSupply() - token.lockedBalanceOf(user1));
+        assertEq(token.lockedBalanceOf(user1), balance1);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), balance1);
+        assertEq(token.totalSupply(), token.initialSupply() - balance1);
 
         // remove from blacklist reverts for non owner.
         vm.prank(user2);
@@ -89,14 +96,26 @@ contract BlacklistTest is ERC20RewardsTest {
         token.removeFromBlacklist(user1);
 
         assertFalse(token.isBlacklisted(user1));
+        assertFalse(token.isBlacklisted(user2));
+        assertEq(token.balanceOf(user1), balance1);
+        assertEq(token.balanceOf(user2), balance2);
         assertEq(token.totalShares(), balance1 + balance2);
+        assertEq(token.lockedBalanceOf(user1), 0);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), 0);
         assertEq(token.totalSupply(), token.initialSupply());
 
         // can remove many times from blacklist.
         token.removeFromBlacklist(user1);
 
         assertFalse(token.isBlacklisted(user1));
+        assertFalse(token.isBlacklisted(user2));
+        assertEq(token.balanceOf(user1), balance1);
+        assertEq(token.balanceOf(user2), balance2);
         assertEq(token.totalShares(), balance1 + balance2);
+        assertEq(token.lockedBalanceOf(user1), 0);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), 0);
         assertEq(token.totalSupply(), token.initialSupply());
     }
 
@@ -112,7 +131,11 @@ contract BlacklistTest is ERC20RewardsTest {
         uint256 balance1 = token.balanceOf(user1);
 
         assertTrue(token.isBlacklisted(user1));
-        assertGt(balance1, 0);
+        assertGt(token.balanceOf(user1), 0); // show the actual balance until the trading starts (uniswap accept swaps).
+        assertEq(token.totalShares(), 0);
+        assertEq(token.lockedBalanceOf(user1), balance1);
+        assertEq(token.blacklistedSupply(), balance1);
+        assertEq(token.totalSupply(), token.initialSupply() - balance1);
 
         // user2 buys.
         vm.roll(token.startBlock() + token.deadBlocks() + 1);
@@ -121,8 +144,16 @@ contract BlacklistTest is ERC20RewardsTest {
 
         uint256 balance2 = token.balanceOf(user2);
 
+        // trading started so user1 balance is locked.
+        assertTrue(token.isBlacklisted(user1));
         assertFalse(token.isBlacklisted(user2));
-        assertGt(balance2, 0);
+        assertEq(token.balanceOf(user1), 0);
+        assertGt(token.balanceOf(user2), 0);
+        assertEq(token.totalShares(), balance2);
+        assertEq(token.lockedBalanceOf(user1), balance1);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), balance1);
+        assertEq(token.totalSupply(), token.initialSupply() - balance1);
 
         // keep half of user2 balance.
         uint256 half = balance2 / 2;
@@ -134,10 +165,15 @@ contract BlacklistTest is ERC20RewardsTest {
 
         token.transfer(user1, half);
 
+        assertTrue(token.isBlacklisted(user1));
+        assertFalse(token.isBlacklisted(user2));
         assertEq(token.balanceOf(user1), 0);
-        assertEq(token.lockedBalanceOf(user1), balance1 + half);
-
         assertEq(token.balanceOf(user2), balance2 - half);
+        assertEq(token.totalShares(), balance2 - half);
+        assertEq(token.lockedBalanceOf(user1), balance1 + half);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), balance1 + half);
+        assertEq(token.totalSupply(), token.initialSupply() - balance1 - half);
 
         // blacklisted user can still receive tokens with transfered from.
         vm.prank(user2);
@@ -146,10 +182,15 @@ contract BlacklistTest is ERC20RewardsTest {
 
         token.transferFrom(user2, user1, half);
 
+        assertTrue(token.isBlacklisted(user1));
+        assertFalse(token.isBlacklisted(user2));
         assertEq(token.balanceOf(user1), 0);
-        assertEq(token.lockedBalanceOf(user1), balance1 + half * 2);
-
         assertEq(token.balanceOf(user2), balance2 - half * 2);
+        assertEq(token.totalShares(), balance2 - half * 2);
+        assertEq(token.lockedBalanceOf(user1), balance1 + half * 2);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), balance1 + half * 2);
+        assertEq(token.totalSupply(), token.initialSupply() - balance1 - half * 2);
 
         // blacklisted user can't send tokens anymore.
         vm.prank(user1);
@@ -171,14 +212,29 @@ contract BlacklistTest is ERC20RewardsTest {
         token.removeFromBlacklist(user1);
 
         assertFalse(token.isBlacklisted(user1));
+        assertFalse(token.isBlacklisted(user2));
+        assertEq(token.balanceOf(user1), balance1 + half * 2);
+        assertEq(token.balanceOf(user2), balance2 - half * 2);
+        assertEq(token.totalShares(), balance1 + balance2);
+        assertEq(token.lockedBalanceOf(user1), 0);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), 0);
+        assertEq(token.totalSupply(), token.initialSupply());
 
         // user1 can send tokens again.
         vm.prank(user1);
 
         token.transfer(user2, half);
 
+        assertFalse(token.isBlacklisted(user1));
+        assertFalse(token.isBlacklisted(user2));
         assertEq(token.balanceOf(user1), balance1 + half);
         assertEq(token.balanceOf(user2), balance2 - half);
+        assertEq(token.totalShares(), balance1 + balance2);
+        assertEq(token.lockedBalanceOf(user1), 0);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), 0);
+        assertEq(token.totalSupply(), token.initialSupply());
 
         // user1 can send from a transfer from again.
         vm.prank(user1);
@@ -187,8 +243,15 @@ contract BlacklistTest is ERC20RewardsTest {
 
         token.transferFrom(user1, user2, half);
 
+        assertFalse(token.isBlacklisted(user1));
+        assertFalse(token.isBlacklisted(user2));
         assertEq(token.balanceOf(user1), balance1);
         assertEq(token.balanceOf(user2), balance2);
+        assertEq(token.totalShares(), balance1 + balance2);
+        assertEq(token.lockedBalanceOf(user1), 0);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), 0);
+        assertEq(token.totalSupply(), token.initialSupply());
     }
 
     function testBlacklistDistribution() public {
@@ -203,7 +266,11 @@ contract BlacklistTest is ERC20RewardsTest {
         uint256 balance1 = token.balanceOf(user1);
 
         assertTrue(token.isBlacklisted(user1));
-        assertGt(balance1, 0);
+        assertGt(token.balanceOf(user1), 0); // show the actual balance until the trading starts (uniswap accept swaps).
+        assertEq(token.totalShares(), 0);
+        assertEq(token.lockedBalanceOf(user1), balance1);
+        assertEq(token.blacklistedSupply(), balance1);
+        assertEq(token.totalSupply(), token.initialSupply() - balance1);
 
         // user2 buys.
         vm.roll(token.startBlock() + token.deadBlocks() + 1);
@@ -212,13 +279,18 @@ contract BlacklistTest is ERC20RewardsTest {
 
         uint256 balance2 = token.balanceOf(user2);
 
+        // trading started so user1 balance is locked.
+        assertTrue(token.isBlacklisted(user1));
         assertFalse(token.isBlacklisted(user2));
-        assertGt(balance2, 0);
-
-        // total shares are user2 balance.
+        assertEq(token.balanceOf(user1), 0);
+        assertGt(token.balanceOf(user2), 0);
         assertEq(token.totalShares(), balance2);
+        assertEq(token.lockedBalanceOf(user1), balance1);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), balance1);
+        assertEq(token.totalSupply(), token.initialSupply() - balance1);
 
-        // distribute the rewards.
+        // distribute the current rewards.
         token.swapCollectedTax(0);
         token.distribute(0);
 
@@ -233,9 +305,14 @@ contract BlacklistTest is ERC20RewardsTest {
         token.removeFromBlacklist(user1);
 
         assertFalse(token.isBlacklisted(user1));
-
-        // total shares are now user1 + user2 balance.
+        assertFalse(token.isBlacklisted(user2));
+        assertGt(token.balanceOf(user1), 0);
+        assertGt(token.balanceOf(user2), 0);
         assertEq(token.totalShares(), balance1 + balance2);
+        assertEq(token.lockedBalanceOf(user1), 0);
+        assertEq(token.lockedBalanceOf(user2), 0);
+        assertEq(token.blacklistedSupply(), 0);
+        assertEq(token.totalSupply(), token.initialSupply());
 
         // add rewards and distribute and distribute.
         addRewards(1 ether);
