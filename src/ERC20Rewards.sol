@@ -469,18 +469,18 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // =========================================================================
 
     /**
-     * Remove max wallet limits, one shoot.
-     */
-    function removeMaxWallet() external onlyOperator {
-        maxWallet = type(uint256).max;
-    }
-
-    /**
      * Operator can update itself.
      */
     function setOperator(address _operator) external onlyOperator {
         require(address(0) != _operator, "!address");
         operator = _operator;
+    }
+
+    /**
+     * Remove max wallet limits, one shoot.
+     */
+    function removeMaxWallet() external onlyOperator {
+        maxWallet = type(uint256).max;
     }
 
     /**
