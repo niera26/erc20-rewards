@@ -31,18 +31,25 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     IUniswapV2Router02 public constant router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
     IERC20Metadata public constant rewardToken = IERC20Metadata(0x77E06c9eCCf2E797fd462A92B6D7642EF85b0A44); // wTAO
 
+    // the amm pair where the tranfers from/to are taxed.
+    // (populated with WETH/this token pair address in the constructor).
+    IUniswapV2Pair public immutable pair;
+
     // =========================================================================
     // rewards management.
     // =========================================================================
+
+    struct Share {
+        uint256 amount; // recorded balance after last transfer.
+        uint256 earned; // amount of tokens earned but not claimed yet.
+        uint256 tokenPerShareLast; // token per share value of the last earn occurrence.
+    }
 
     // numerator multiplier so tokenPerShare does not get rounded to 0.
     uint256 private constant PRECISION = 1e18;
 
     // scale factor so reward token scales to 18 decimals.
     uint256 private immutable SCALE_FACTOR;
-
-    // the accumulated amount of reward token per share.
-    uint256 private tokenPerShare;
 
     // total shares of this token.
     // (different from total supply because of addresses excluded from rewards).
@@ -52,21 +59,14 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // (addresses included to rewards are updated every time they send/receive tokens).
     mapping(address => Share) private shareholders;
 
-    struct Share {
-        uint256 amount; // recorded balance after last transfer.
-        uint256 earned; // amount of tokens earned but not claimed yet.
-        uint256 tokenPerShareLast; // token per share value of the last earn occurrence.
-    }
+    // the accumulated amount of reward token per share.
+    uint256 private tokenPerShare;
 
     // total amount of reward tokens ever claimed.
     uint256 public totalRewardClaimed;
 
     // total amount of reward tokens ever distributed.
     uint256 public totalRewardDistributed;
-
-    // amm pair addresses the tranfers from/to are taxed.
-    // (populated with WETH/this token pair address in the constructor).
-    mapping(address => bool) public pairs;
 
     // contract addresses that opted in for rewards.
     mapping(address => bool) public isOptin;
@@ -164,6 +164,12 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         require(rewardTokenDecimals <= 18, "reward token decimals must be <= 18");
 
         SCALE_FACTOR = 10 ** (18 - rewardTokenDecimals);
+
+        // create an amm pair with WETH.
+        // as a contract, pair is automatically excluded from rewards.
+        IUniswapV2Factory factory = IUniswapV2Factory(router.factory());
+
+        pair = IUniswapV2Pair(factory.createPair(router.WETH(), address(this)));
 
         // mint total supply to itself.
         _mint(address(this), _totalSupply * 10 ** decimals());
@@ -298,28 +304,6 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         rewardToken.safeTransfer(to, amountToClaim);
 
         emit Claim(msg.sender, to, amountToClaim);
-    }
-
-    /**
-     * Create a pair between this token and the given token.
-     */
-    function createAmmPairWith(address token) public {
-        IUniswapV2Factory factory = IUniswapV2Factory(router.factory());
-
-        address pair = factory.createPair(token, address(this));
-
-        pairs[pair] = true;
-    }
-
-    /**
-     * Register an existing pair between this token and the given token.
-     */
-    function recordAmmPairWith(address token) public {
-        IUniswapV2Factory factory = IUniswapV2Factory(router.factory());
-
-        address pair = factory.getPair(token, address(this));
-
-        pairs[pair] = true;
     }
 
     /**
@@ -466,10 +450,6 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         // the all balance will be put in the LP.
         uint256 balance = balanceOf(address(this));
 
-        // create an amm pair with WETH.
-        // as a contract, pair is automatically excluded from rewards.
-        createAmmPairWith(router.WETH());
-
         // approve router to use total balance.
         _approve(address(this), address(router), balance);
 
@@ -542,10 +522,10 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     /**
      * Whether the given address can be blacklisted.
      *
-     * Obviously this contract, the router and the pairs can't be blacklisted.
+     * Obviously this contract, the router and the pair can't be blacklisted.
      */
     function _isExcludedFromBlacklist(address addr) private view returns (bool) {
-        return address(this) == addr || address(router) == addr || pairs[addr];
+        return address(this) == addr || address(router) == addr || address(pair) == addr;
     }
 
     /**
@@ -554,7 +534,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * Blacklisted addresses are excluded too so they can buy as much as they want.
      */
     function _isExcludedFromMaxWallet(address addr) private view returns (bool) {
-        return address(this) == addr || address(router) == addr || pairs[addr] || isBlacklisted(addr);
+        return address(this) == addr || address(router) == addr || address(pair) == addr || isBlacklisted(addr);
     }
 
     /**
@@ -671,7 +651,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * a registered amm pair.
      *
      * - transfers from a blacklisted address reverts.
-     * - transfers from/to registered pairs are taxed.
+     * - transfers from/to the amm pair are taxed.
      * - taxed tokens are sent to this very contract.
      * - on a taxed sell, the collected tax is swapped for eth.
      * - updates the shares of both the from and to addresses.
@@ -683,8 +663,8 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         bool isTradingEnabled = _isTradingEnabled();
 
         // check if it is a taxed buy/sell.
-        bool isTaxedBuy = pairs[from] && !_isExcludedFromTaxes(to);
-        bool isTaxedSell = !_isExcludedFromTaxes(from) && pairs[to];
+        bool isTaxedBuy = address(pair) == from && !_isExcludedFromTaxes(to);
+        bool isTaxedSell = !_isExcludedFromTaxes(from) && address(pair) == to;
 
         // lock the blacklisted senders when trading is enabled.
         if (isTradingEnabled && isBlacklisted(from)) {
