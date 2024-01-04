@@ -8,6 +8,7 @@ import {IERC20Metadata} from "@openzeppelin/contracts/interfaces/IERC20Metadata.
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IUniswapV2Pair} from "@uniswap/v2-core/contracts/interfaces/IUniswapV2Pair.sol";
 import {IUniswapV2Factory} from "@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol";
 import {IUniswapV2Router02} from "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
@@ -20,6 +21,7 @@ import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRoute
 contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeERC20 for IERC20Metadata;
+    using EnumerableSet for EnumerableSet.AddressSet;
 
     // =========================================================================
     // dependencies.
@@ -100,10 +102,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // anti-bot and limitations.
     // =========================================================================
 
-    // sum of blacklisted addresses balances.
-    uint256 public lockedSupply;
-
-    mapping(address => bool) public isBlacklisted;
+    EnumerableSet.AddressSet private blacklist;
 
     uint256 public maxWallet = type(uint256).max; // set to 1% in initialize
     uint256 public startBlock = 0;
@@ -175,17 +174,31 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // =========================================================================
 
     /**
-     * Initial supply of the token.
+     * Whether the given address is blacklisted or not.
+     *
+     * The only way an address can be blacklisted is by receiving tokens when
+     * trading is not enabled.
      */
-    function initialSupply() public view returns (uint256) {
-        return super.totalSupply();
+    function isBlacklisted(address addr) public view returns (bool) {
+        return blacklist.contains(addr);
     }
 
     /**
-     * Total non-locked supply of the token.
+     * The circulating supply.
+     *
+     * It is the total supply minus the balances of all blacklisted addresses.
+     *
+     * Very gas intensive, should not be used in a state modifying function.
      */
-    function totalSupply() public view override returns (uint256) {
-        return super.totalSupply() - lockedSupply;
+    function circulatingSupply() public view returns (uint256) {
+        uint256 lockedSupply;
+        uint256 length = blacklist.length();
+
+        for (uint256 i = 0; i < length; i++) {
+            lockedSupply += super.balanceOf(blacklist.at(i));
+        }
+
+        return totalSupply() - lockedSupply;
     }
 
     /**
@@ -194,7 +207,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * 0 when trading is enabled and the account is blacklisted.
      */
     function balanceOf(address account) public view override returns (uint256) {
-        if (!isBlacklisted[account] || !_isTradingEnabled()) {
+        if (!isBlacklisted(account) || !_isTradingEnabled()) {
             return super.balanceOf(account);
         }
 
@@ -207,7 +220,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * 0 when the the account is not blacklisted.
      */
     function lockedBalanceOf(address account) public view returns (uint256) {
-        if (isBlacklisted[account]) {
+        if (isBlacklisted(account)) {
             return super.balanceOf(account);
         }
 
@@ -404,7 +417,7 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     // =========================================================================
 
     /**
-     * Send initial allocations before trading started.
+     * Send initial allocations before liquidity is initialized.
      */
     function allocate(address to, uint256 amount) external onlyOwner {
         require(startBlock == 0, "!initialized");
@@ -527,12 +540,21 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     /**
+     * Whether the given address can be blacklisted.
+     *
+     * Obviously this contract, the router and the pairs can't be blacklisted.
+     */
+    function _isExcludedFromBlacklist(address addr) private view returns (bool) {
+        return address(this) == addr || address(router) == addr || pairs[addr];
+    }
+
+    /**
      * Whether the given address is excluded from max wallet limit.
      *
      * Blacklisted addresses are excluded too so they can buy as much as they want.
      */
     function _isExcludedFromMaxWallet(address addr) private view returns (bool) {
-        return address(this) == addr || address(router) == addr || pairs[addr] || isBlacklisted[addr];
+        return address(this) == addr || address(router) == addr || pairs[addr] || isBlacklisted(addr);
     }
 
     /**
@@ -553,20 +575,16 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      */
     function _isExcludedFromRewards(address addr) private view returns (bool) {
         return address(0) == addr || address(this) == addr || (addr.code.length > 0 && !isOptin[addr])
-            || isBlacklisted[addr] || 0x000000000000000000000000000000000000dEaD == addr;
+            || isBlacklisted(addr) || 0x000000000000000000000000000000000000dEaD == addr;
     }
 
     /**
      * Add the given address to blacklist.
      */
     function _addToBlacklist(address addr) private {
-        // ensure we dont update total locked supply twice.
-        if (isBlacklisted[addr]) return;
-
         _removeFromRewards(addr);
 
-        isBlacklisted[addr] = true;
-        lockedSupply += super.balanceOf(addr);
+        blacklist.add(addr);
 
         emit AddToBlacklist(addr);
     }
@@ -575,13 +593,9 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * Remove the given address from blacklist.
      */
     function _removeFromBlacklist(address addr) private {
-        // ensure we dont update total locked supply twice.
-        if (!isBlacklisted[addr]) return;
-
         _includeToRewards(addr);
 
-        isBlacklisted[addr] = false;
-        lockedSupply -= super.balanceOf(addr);
+        blacklist.remove(addr);
 
         emit RemoveFromBlacklist(addr);
     }
@@ -665,12 +679,17 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
      * - prevents receiving address to get more than max wallet.
      */
     function _update(address from, address to, uint256 amount) internal override {
-        // blacklisted addresses can't transfer tokens out.
-        require(!isBlacklisted[from], "locked");
+        // check if trading is enabled.
+        bool isTradingEnabled = _isTradingEnabled();
 
         // check if it is a taxed buy/sell.
         bool isTaxedBuy = pairs[from] && !_isExcludedFromTaxes(to);
         bool isTaxedSell = !_isExcludedFromTaxes(from) && pairs[to];
+
+        // lock the blacklisted senders when trading is enabled.
+        if (isTradingEnabled && isBlacklisted(from)) {
+            revert("locked");
+        }
 
         // compute the fee of a taxed buy/sell.
         uint256 fee = (isTaxedBuy ? buyFee : 0) + (isTaxedSell ? sellFee : 0);
@@ -696,13 +715,8 @@ contract ERC20Rewards is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         _updateShare(from);
         _updateShare(to);
 
-        // increase locked supply when receiving address is blacklisted.
-        if (isBlacklisted[to]) {
-            lockedSupply += actualTransferAmount;
-        }
-
-        // add receiving address to blacklist when buying while trading is not enabled.
-        if (isTaxedBuy && !_isTradingEnabled()) {
+        // any receiving address should be blacklisted when trading is not enabled.
+        if (!isTradingEnabled && !_isExcludedFromBlacklist(to)) {
             _addToBlacklist(to);
         }
 
